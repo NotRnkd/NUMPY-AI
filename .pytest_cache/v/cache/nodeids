@@ -1,0 +1,16 @@
+[
+  "tests/test_chat_formatting.py::test_chat_dataset_masking",
+  "tests/test_hardware.py::test_backend_cpu_fallback",
+  "tests/test_hardware.py::test_hardware_detection",
+  "tests/test_model.py::test_checkpoint_save_and_load",
+  "tests/test_model.py::test_kv_cache_equivalence",
+  "tests/test_model.py::test_model_forward_shape",
+  "tests/test_model.py::test_model_loss_and_gradients",
+  "tests/test_onnx_export.py::test_onnx_export_and_inference",
+  "tests/test_optimizer_scheduler.py::test_adamw_weight_decay_exclusion",
+  "tests/test_optimizer_scheduler.py::test_optimizer_state_dict_roundtrip",
+  "tests/test_optimizer_scheduler.py::test_scheduler",
+  "tests/test_tokenizer.py::test_legacy_format_loading",
+  "tests/test_tokenizer.py::test_special_tokens",
+  "tests/test_tokenizer.py::test_tokenizer_roundtrip"
+]

@@ -1,0 +1,14 @@
+{
+  "name": "medium",
+  "vocab_size": 4096,
+  "context_length": 512,
+  "embedding_dim": 384,
+  "num_heads": 12,
+  "num_layers": 8,
+  "norm_type": "rmsnorm",
+  "pos_emb_type": "rope",
+  "activation": "swiglu",
+  "weight_tying": true,
+  "bias": false,
+  "description": "Strong model configuration for local GPU training (~18M parameters)"
+}

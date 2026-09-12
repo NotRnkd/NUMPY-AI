@@ -1,0 +1,14 @@
+{
+  "name": "tiny",
+  "vocab_size": 4096,
+  "context_length": 256,
+  "embedding_dim": 128,
+  "num_heads": 4,
+  "num_layers": 4,
+  "norm_type": "rmsnorm",
+  "pos_emb_type": "rope",
+  "activation": "swiglu",
+  "weight_tying": true,
+  "bias": false,
+  "description": "Ultra-fast CPU & laptop configuration (<1.5M parameters)"
+}

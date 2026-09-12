@@ -1,0 +1,14 @@
+{
+  "name": "small",
+  "vocab_size": 4096,
+  "context_length": 256,
+  "embedding_dim": 256,
+  "num_heads": 8,
+  "num_layers": 6,
+  "norm_type": "rmsnorm",
+  "pos_emb_type": "rope",
+  "activation": "swiglu",
+  "weight_tying": true,
+  "bias": false,
+  "description": "Balanced high-quality configuration for modern CPUs or entry GPUs (~6M parameters)"
+}

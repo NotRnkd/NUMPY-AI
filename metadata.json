@@ -1,0 +1,8 @@
+{
+  "name": "NumPy-GPT Studio",
+  "description": "Interactive web interface, training monitor, architecture inspector, and chat studio for NumPy-GPT",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
