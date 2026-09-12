@@ -1,0 +1,24 @@
+{
+  "vocab_size": 301,
+  "context_length": 128,
+  "embedding_dim": 128,
+  "num_heads": 4,
+  "num_layers": 4,
+  "dropout": 0.0,
+  "norm_type": "rmsnorm",
+  "pos_emb_type": "rope",
+  "activation": "swiglu",
+  "weight_tying": true,
+  "bias": false,
+  "eps": 1e-05,
+  "block_size": 128,
+  "n_embd": 128,
+  "n_head": 4,
+  "n_layer": 4,
+  "metadata": {
+    "auto_cycle": 3,
+    "auto_steps": 30,
+    "val_loss": 3.484739303588867,
+    "timestamp": 1789203656.8300457
+  }
+}

@@ -1,5 +1,7 @@
 [
+  "tests/test_auto_trainer.py::test_auto_trainer_lifecycle",
   "tests/test_chat_formatting.py::test_chat_dataset_masking",
+  "tests/test_chat_formatting.py::test_sharegpt_and_alpaca_formatting",
   "tests/test_hardware.py::test_backend_cpu_fallback",
   "tests/test_hardware.py::test_hardware_detection",
   "tests/test_model.py::test_checkpoint_save_and_load",

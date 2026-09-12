@@ -86,14 +86,43 @@ class ChatDataset:
     def _encode_sample(self, sample: Dict[str, Any]) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         tok = self.tokenizer
         messages = sample.get("messages")
+
+        # 1. Check for ShareGPT / Vicuna format: {"conversations": [{"from": "human|gpt", "value": "..."}]}
+        if not messages and "conversations" in sample and isinstance(sample["conversations"], list):
+            messages = []
+            for turn in sample["conversations"]:
+                sender = str(turn.get("from", "") or turn.get("role", "")).lower()
+                text_val = str(turn.get("value", "") or turn.get("content", "") or turn.get("text", "")).strip()
+                if not text_val:
+                    continue
+                if sender in ("human", "user"):
+                    messages.append({"role": "user", "content": text_val})
+                elif sender in ("gpt", "chatgpt", "assistant", "bot", "model"):
+                    messages.append({"role": "assistant", "content": text_val})
+                elif sender in ("system",):
+                    messages.append({"role": "system", "content": text_val})
+
+        # 2. Check for Alpaca / Dolly / HC3 / Prompt-Response format
         if not messages:
-            # Handle prompt/response format
-            instruction = sample.get("instruction") or sample.get("prompt") or ""
-            response = sample.get("response") or sample.get("output") or ""
+            instruction = sample.get("instruction") or sample.get("prompt") or sample.get("question") or ""
+            context = sample.get("input") or sample.get("context") or ""
+            
+            # Extract response
+            response = sample.get("response") or sample.get("output") or sample.get("answer") or ""
+            if not response and "chatgpt_answers" in sample:
+                answers = sample["chatgpt_answers"]
+                response = answers[0] if isinstance(answers, list) and answers else str(answers)
+
+            instruction = str(instruction).strip()
+            context = str(context).strip()
+            response = str(response).strip()
+
             if not instruction or not response:
                 return None
+
+            user_content = f"{instruction}\n\nContext:\n{context}" if context else instruction
             messages = [
-                {"role": "user", "content": instruction},
+                {"role": "user", "content": user_content},
                 {"role": "assistant", "content": response},
             ]
 
@@ -114,7 +143,7 @@ class ChatDataset:
                 t_ids = tok.encode(role_prefix, allowed_special=True)
                 all_tokens.extend(t_ids)
                 all_masks.extend([0.0] * len(t_ids))
-            elif role == "assistant":
+            elif role in ("assistant", "gpt", "model"):
                 role_prefix = f"<assistant>{content}<eos>"
                 t_ids = tok.encode(role_prefix, allowed_special=True)
                 all_tokens.extend(t_ids)
@@ -161,6 +190,28 @@ class ChatDataset:
         val_ratio: float = 0.05,
     ) -> "ChatDataset":
         path = Path(path)
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        samples = raw if isinstance(raw, list) else [raw]
+        content = path.read_text(encoding="utf-8").strip()
+        samples: List[Dict[str, Any]] = []
+
+        # Try standard JSON list first
+        if content.startswith("["):
+            try:
+                raw = json.loads(content)
+                samples = raw if isinstance(raw, list) else [raw]
+            except json.JSONDecodeError:
+                pass
+
+        # Fallback to JSON Lines (.jsonl) or line-by-line parsing
+        if not samples:
+            for line in content.splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        samples.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        if not samples:
+            raise ValueError(f"No valid JSON or JSONL records could be read from {path}")
+
         return cls(samples, tokenizer, context_length, val_ratio)

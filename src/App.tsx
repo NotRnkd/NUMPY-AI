@@ -17,6 +17,16 @@ import {
   Sliders,
   ChevronRight,
   Terminal,
+  Database,
+  FileText,
+  BookOpen,
+  ExternalLink,
+  Copy,
+  Check,
+  Sparkles,
+  Bot,
+  Repeat,
+  Award,
 } from 'lucide-react';
 
 interface ModelStatus {
@@ -64,6 +74,20 @@ interface TrainMetrics {
   history: Array<{ step: number; loss: number; val_loss: number }>;
 }
 
+interface AutoTrainMetrics {
+  is_running: boolean;
+  mode: string;
+  cycle_count: number;
+  total_steps: number;
+  current_loss: number;
+  val_loss: number;
+  best_val_loss: number | null;
+  auto_checkpoints: number;
+  status_message: string;
+  synthetic_pairs_generated: number;
+  history: Array<{ cycle: number; step: number; loss: number; val_loss: number; lr: number; timestamp: number }>;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'generate' | 'architecture' | 'train' | 'hardware'>('chat');
   const [status, setStatus] = useState<ModelStatus | null>(null);
@@ -96,6 +120,10 @@ export default function App() {
   // Training State
   const [trainSteps, setTrainSteps] = useState(30);
   const [trainLr, setTrainLr] = useState(0.0005);
+  const [selectedDataset, setSelectedDataset] = useState('corpus/sample_chatgpt_dataset.json');
+  const [customDataText, setCustomDataText] = useState('');
+  const [availableDatasets, setAvailableDatasets] = useState<Array<{ path: string; name: string; type: string; size_kb: number }>>([]);
+  const [copiedCli, setCopiedCli] = useState(false);
   const [trainMetrics, setTrainMetrics] = useState<TrainMetrics>({
     is_training: false,
     step: 0,
@@ -105,6 +133,24 @@ export default function App() {
     lr: 0,
     history: [],
   });
+
+  // Auto-Train State
+  const [autoTrainMetrics, setAutoTrainMetrics] = useState<AutoTrainMetrics>({
+    is_running: false,
+    mode: 'autonomous_loop',
+    cycle_count: 0,
+    total_steps: 0,
+    current_loss: 0,
+    val_loss: 0,
+    best_val_loss: null,
+    auto_checkpoints: 0,
+    status_message: 'Idle (not started)',
+    synthetic_pairs_generated: 0,
+    history: [],
+  });
+  const [autoTrainMode, setAutoTrainMode] = useState<'autonomous_loop' | 'self_play'>('autonomous_loop');
+  const [autoTrainLr, setAutoTrainLr] = useState(0.0003);
+  const [isAutoTrainToggling, setIsAutoTrainToggling] = useState(false);
 
   // Benchmark & Export State
   const [benchResult, setBenchResult] = useState<any>(null);
@@ -116,6 +162,7 @@ export default function App() {
   useEffect(() => {
     fetchStatus();
     fetchHardware();
+    fetchDatasets();
   }, []);
 
   useEffect(() => {
@@ -141,6 +188,22 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeTab, trainMetrics.is_training]);
 
+  // Continuously poll autotrain status
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/autotrain/status');
+        if (res.ok) {
+          const data = await res.json();
+          setAutoTrainMetrics(data);
+        }
+      } catch {
+        // ignore transient poll failure
+      }
+    }, 1200);
+    return () => clearInterval(timer);
+  }, []);
+
   const fetchStatus = async () => {
     try {
       const res = await fetch('/api/status');
@@ -162,6 +225,20 @@ export default function App() {
       }
     } catch (e) {
       console.error('Failed to fetch hardware', e);
+    }
+  };
+
+  const fetchDatasets = async () => {
+    try {
+      const res = await fetch('/api/datasets');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.datasets && data.datasets.length > 0) {
+          setAvailableDatasets(data.datasets);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch datasets', e);
     }
   };
 
@@ -256,6 +333,8 @@ export default function App() {
           steps: trainSteps,
           lr: trainLr,
           batch_size: 2,
+          dataset_path: selectedDataset,
+          custom_data: selectedDataset === 'custom' ? customDataText : undefined,
         }),
       });
       setTrainMetrics((prev) => ({ ...prev, is_training: true }));
@@ -269,6 +348,44 @@ export default function App() {
       await fetch('/api/train/stop', { method: 'POST' });
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleToggleAutoTrain = async () => {
+    setIsAutoTrainToggling(true);
+    try {
+      if (autoTrainMetrics.is_running) {
+        const res = await fetch('/api/autotrain/stop', { method: 'POST' });
+        if (res.ok) {
+          setAutoTrainMetrics((prev) => ({
+            ...prev,
+            is_running: false,
+            status_message: 'Auto-training stopped.',
+          }));
+        }
+      } else {
+        const datasetPath = selectedDataset === 'custom' ? 'corpus/sample_chatgpt_dataset.json' : selectedDataset;
+        const res = await fetch('/api/autotrain/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: autoTrainMode,
+            dataset_path: datasetPath,
+            lr: autoTrainLr,
+          }),
+        });
+        if (res.ok) {
+          setAutoTrainMetrics((prev) => ({
+            ...prev,
+            is_running: true,
+            status_message: 'Autonomous auto-trainer running...',
+          }));
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsAutoTrainToggling(false);
     }
   };
 
@@ -325,6 +442,18 @@ export default function App() {
 
         {/* Global status pills */}
         <div className="flex items-center gap-3">
+          {autoTrainMetrics.is_running && (
+            <div
+              id="header-autotrain-indicator"
+              onClick={() => setActiveTab('train')}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-xs font-mono text-emerald-300 cursor-pointer hover:bg-emerald-900/60 transition-colors shadow-sm animate-pulse"
+              title="Click to jump to Auto-Training dashboard"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="font-semibold">Auto-Training</span>
+              <span className="text-emerald-400/80">Cycle #{autoTrainMetrics.cycle_count}</span>
+            </div>
+          )}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-800/80 border border-neutral-700/60 text-xs font-mono">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <span className="text-neutral-400">Backend:</span>
@@ -778,6 +907,206 @@ export default function App() {
         {/* ================= TRAIN TAB ================= */}
         {activeTab === 'train' && (
           <div className="space-y-6">
+            {/* Autonomous Self-Training (Auto-Train) Section */}
+            <div
+              id="autotrain-hero-card"
+              className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-6 relative overflow-hidden shadow-lg"
+            >
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                <div className="flex items-start gap-3.5">
+                  <div
+                    className={`w-11 h-11 rounded-xl flex items-center justify-center border ${
+                      autoTrainMetrics.is_running
+                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                        : 'bg-indigo-500/20 border-indigo-500/30 text-indigo-400'
+                    }`}
+                  >
+                    <Bot className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2.5">
+                      <h2 className="text-lg font-semibold text-neutral-100 tracking-tight">
+                        Autonomous Self-Training Engine
+                      </h2>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-mono">
+                        Auto-Trainer v1.0
+                      </span>
+                    </div>
+                    <p className="text-xs text-neutral-400 mt-1 max-w-2xl leading-relaxed">
+                      Enables NumPy-GPT to continuously train itself without manual supervision: orchestrating batches,
+                      optimizing weights via AdamW & cosine warmup, evaluating validation loss, and automatically persisting
+                      the best checkpoints to disk.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Status Indicator */}
+                <div className="flex items-center gap-2 self-start md:self-auto">
+                  <div
+                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-mono font-medium ${
+                      autoTrainMetrics.is_running
+                        ? 'bg-emerald-950/70 border-emerald-500/40 text-emerald-300'
+                        : 'bg-neutral-950 border-neutral-800 text-neutral-400'
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        autoTrainMetrics.is_running ? 'bg-emerald-400 animate-ping' : 'bg-neutral-600'
+                      }`}
+                    ></span>
+                    <span>
+                      {autoTrainMetrics.is_running
+                        ? `RUNNING (Cycle #${autoTrainMetrics.cycle_count})`
+                        : 'ENGINE STANDBY'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4 Metric Highlights */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800/80">
+                  <div className="text-[11px] font-mono text-neutral-500 uppercase flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Current Loss</span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-neutral-100 mt-1">
+                    {autoTrainMetrics.current_loss > 0 ? autoTrainMetrics.current_loss.toFixed(4) : '—'}
+                  </div>
+                  <div className="text-[11px] text-neutral-500 mt-0.5 font-mono">
+                    Step {autoTrainMetrics.total_steps}
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800/80">
+                  <div className="text-[11px] font-mono text-neutral-500 uppercase flex items-center gap-1.5">
+                    <Award className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Best Val Loss</span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-emerald-400 mt-1">
+                    {autoTrainMetrics.best_val_loss ? autoTrainMetrics.best_val_loss.toFixed(4) : '—'}
+                  </div>
+                  <div className="text-[11px] text-emerald-500/80 mt-0.5 font-mono">
+                    Auto-checkpoint target
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800/80">
+                  <div className="text-[11px] font-mono text-neutral-500 uppercase flex items-center gap-1.5">
+                    <Repeat className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Autonomous Cycles</span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-indigo-400 mt-1">
+                    #{autoTrainMetrics.cycle_count}
+                  </div>
+                  <div className="text-[11px] text-neutral-500 mt-0.5 font-mono">
+                    {autoTrainMetrics.total_steps} micro-steps
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800/80">
+                  <div className="text-[11px] font-mono text-neutral-500 uppercase flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Auto-Saved Checkpoints</span>
+                  </div>
+                  <div className="text-xl font-bold font-mono text-amber-400 mt-1">
+                    {autoTrainMetrics.auto_checkpoints}
+                  </div>
+                  <div className="text-[11px] text-neutral-500 mt-0.5 font-mono">
+                    auto_trained_model.npz
+                  </div>
+                </div>
+              </div>
+
+              {/* Auto-Training Controls & Toggle */}
+              <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div>
+                    <label className="text-xs font-mono text-neutral-400 block mb-1">Auto-Train Mode</label>
+                    <div className="flex gap-1.5 p-1 bg-neutral-900 border border-neutral-800 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setAutoTrainMode('autonomous_loop')}
+                        disabled={autoTrainMetrics.is_running}
+                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                          autoTrainMode === 'autonomous_loop'
+                            ? 'bg-blue-600 text-white'
+                            : 'text-neutral-400 hover:text-neutral-200'
+                        }`}
+                      >
+                        Dataset Loop
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAutoTrainMode('self_play')}
+                        disabled={autoTrainMetrics.is_running}
+                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                          autoTrainMode === 'self_play'
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-neutral-400 hover:text-neutral-200'
+                        }`}
+                      >
+                        Self-Play (Synthetic)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-mono text-neutral-400 block mb-1">Base Learning Rate</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      value={autoTrainLr}
+                      onChange={(e) => setAutoTrainLr(parseFloat(e.target.value) || 0.0003)}
+                      disabled={autoTrainMetrics.is_running}
+                      className="w-32 bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1 text-xs font-mono text-neutral-200"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-mono text-neutral-400 block mb-1">Target Corpus</label>
+                    <div className="text-xs font-mono text-neutral-300 px-2.5 py-1 bg-neutral-900 border border-neutral-800 rounded-lg max-w-[200px] truncate">
+                      {selectedDataset}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    id="toggle-autotrain-btn"
+                    onClick={handleToggleAutoTrain}
+                    disabled={isAutoTrainToggling}
+                    className={`px-6 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md ${
+                      autoTrainMetrics.is_running
+                        ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                        : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    }`}
+                  >
+                    {isAutoTrainToggling ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : autoTrainMetrics.is_running ? (
+                      <Square className="w-4 h-4" />
+                    ) : (
+                      <Sparkles className="w-4 h-4" />
+                    )}
+                    <span>
+                      {autoTrainMetrics.is_running ? 'Stop Auto-Train Engine' : 'Start Auto-Train Engine'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Message and Telemetry Log */}
+              {autoTrainMetrics.status_message && (
+                <div className="mt-3 text-xs font-mono text-neutral-400 flex items-center justify-between px-1">
+                  <span>
+                    Status: <span className="text-neutral-200">{autoTrainMetrics.status_message}</span>
+                  </span>
+                  <span className="text-neutral-500">CLI: python3 numpy_gpt.py auto-train</span>
+                </div>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Training Controls */}
               <div className="bg-neutral-900/50 border border-neutral-800 rounded-2xl p-6 flex flex-col gap-4">
@@ -785,6 +1114,49 @@ export default function App() {
                   <Activity className="w-5 h-5 text-blue-400" />
                   Training Engine Controls
                 </h3>
+
+                <div>
+                  <label className="text-xs font-mono text-neutral-400 block mb-1">Training Dataset</label>
+                  <select
+                    id="train-dataset-select"
+                    value={selectedDataset}
+                    onChange={(e) => setSelectedDataset(e.target.value)}
+                    disabled={trainMetrics.is_training}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-2.5 text-xs text-neutral-200 font-mono"
+                  >
+                    <option value="corpus/sample_chatgpt_dataset.json">
+                      ChatGPT Sample (Alpaca / Dolly / ShareGPT)
+                    </option>
+                    <option value="data.txt">Basic Python Code Corpus (.txt)</option>
+                    {availableDatasets
+                      .filter(
+                        (d) =>
+                          d.path !== 'corpus/sample_chatgpt_dataset.json' && d.path !== 'data.txt'
+                      )
+                      .map((d) => (
+                        <option key={d.path} value={d.path}>
+                          {d.name} ({d.size_kb} KB)
+                        </option>
+                      ))}
+                    <option value="custom">Paste Custom JSON / JSONL Data</option>
+                  </select>
+                </div>
+
+                {selectedDataset === 'custom' && (
+                  <div>
+                    <label className="text-xs font-mono text-neutral-400 block mb-1">
+                      Paste JSON Array or JSONL
+                    </label>
+                    <textarea
+                      id="custom-data-textarea"
+                      rows={4}
+                      value={customDataText}
+                      onChange={(e) => setCustomDataText(e.target.value)}
+                      placeholder='[{"instruction": "...", "output": "..."}, {"conversations": [{"from": "human", "value": "Hi"}, {"from": "gpt", "value": "Hello"}]}]'
+                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-2.5 text-xs font-mono text-neutral-200 placeholder-neutral-700"
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="text-xs font-mono text-neutral-400 block mb-1">Steps to Run</label>
@@ -910,6 +1282,96 @@ export default function App() {
                       <span className="text-neutral-600">No training iterations yet.</span>
                     )}
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Awesome ChatGPT Dataset Guide Card */}
+            <div className="bg-neutral-900/50 border border-neutral-800 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Database className="w-5 h-5 text-indigo-400" />
+                  <h3 className="text-base font-semibold text-neutral-100">
+                    Awesome ChatGPT Dataset Training Guide
+                  </h3>
+                </div>
+                <a
+                  href="https://github.com/voidful/awesome-chatgpt-dataset"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 font-medium"
+                >
+                  <span>github.com/voidful/awesome-chatgpt-dataset</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800">
+                  <div className="flex items-center gap-2 text-xs font-mono font-semibold text-blue-400 mb-2">
+                    <FileText className="w-4 h-4" />
+                    ShareGPT / Multi-turn
+                  </div>
+                  <p className="text-xs text-neutral-400 leading-relaxed">
+                    Full multi-turn dialogues with human queries and ChatGPT replies:{' '}
+                    <code className="text-neutral-300 font-mono text-[11px]">
+                      &#123;"conversations": [&#123;"from": "human", "value": "..."&#125;, &#123;"from": "gpt", "value": "..."&#125;]&#125;
+                    </code>
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800">
+                  <div className="flex items-center gap-2 text-xs font-mono font-semibold text-emerald-400 mb-2">
+                    <FileText className="w-4 h-4" />
+                    Alpaca & Dolly 15k
+                  </div>
+                  <p className="text-xs text-neutral-400 leading-relaxed">
+                    Single-turn tasks with optional background context:{' '}
+                    <code className="text-neutral-300 font-mono text-[11px]">
+                      &#123;"instruction": "...", "input": "...", "output": "..."&#125;
+                    </code>
+                  </p>
+                </div>
+
+                <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800">
+                  <div className="flex items-center gap-2 text-xs font-mono font-semibold text-purple-400 mb-2">
+                    <Zap className="w-4 h-4" />
+                    Role Loss Masking
+                  </div>
+                  <p className="text-xs text-neutral-400 leading-relaxed">
+                    Prompts receive <span className="font-mono text-neutral-300">mask=0.0</span> so no loss is computed on user inputs. Only assistant tokens receive{' '}
+                    <span className="font-mono text-emerald-400">mask=1.0</span> for true supervised fine-tuning.
+                  </p>
+                </div>
+              </div>
+
+              {/* Ready-to-use CLI commands */}
+              <div className="bg-neutral-950 rounded-xl p-4 border border-neutral-800">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-mono text-neutral-400 uppercase tracking-wider">
+                    Quick CLI Training Commands
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard?.writeText(
+                        'python3 numpy_gpt.py train --data corpus/sample_chatgpt_dataset.json --steps 200 --batch-size 4 --lr 3e-4'
+                      );
+                      setCopiedCli(true);
+                      setTimeout(() => setCopiedCli(false), 2000);
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-mono transition-colors"
+                  >
+                    {copiedCli ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedCli ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+                <div className="space-y-1.5 text-xs font-mono text-neutral-300">
+                  <div className="text-neutral-500"># 1. Convert any local JSON/JSONL dataset from awesome-chatgpt-dataset:</div>
+                  <div className="text-blue-400 pl-2">python3 prepare_chatgpt_dataset.py --file path/to/dataset.jsonl --output corpus/chat.json</div>
+                  <div className="text-neutral-500 pt-1"># 2. Train pure NumPy-GPT with loss masking and AdamW:</div>
+                  <div className="text-emerald-400 pl-2">python3 numpy_gpt.py train --data corpus/sample_chatgpt_dataset.json --steps 200 --batch-size 4 --lr 3e-4</div>
+                  <div className="text-neutral-500 pt-1"># 3. Test multi-turn conversational chat with the trained checkpoint:</div>
+                  <div className="text-purple-400 pl-2">python3 numpy_gpt.py chat --checkpoint checkpoint.npz</div>
                 </div>
               </div>
             </div>

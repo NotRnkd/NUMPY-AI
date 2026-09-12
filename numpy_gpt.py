@@ -27,6 +27,7 @@ from inference.generate import generate_stream, generate_text
 from model.config import CONFIG_PRESETS, GPTConfig, get_preset_config
 from model.transformer import GPT
 from tokenizer.bpe import ByteBPETokenizer, SpecialTokens
+from training.auto_trainer import AutoTrainer
 from training.dataset import ChatDataset, TextDataset
 from training.optimizer import AdamW
 from training.scheduler import CosineWarmupScheduler
@@ -175,6 +176,97 @@ def cmd_train(args: argparse.Namespace) -> None:
         batch_size=args.batch_size,
         start_step=start_step,
     )
+
+
+def cmd_autotrain(args: argparse.Namespace) -> None:
+    """Run autonomous background self-training until interrupted."""
+    device = select_backend(args.device)
+    print(f"[Hardware] Selected compute backend: {device.upper()}")
+
+    data_path = Path(args.data)
+    if not data_path.exists():
+        data_path = Path("corpus/sample_chatgpt_dataset.json")
+        if not data_path.exists():
+            data_path = Path("data.txt")
+
+    ckpt_path, cfg_path, voc_path = _resolve_paths(args.checkpoint, args.config, args.tokenizer_vocab)
+
+    # 1. Tokenizer
+    if voc_path.exists():
+        tokenizer = ByteBPETokenizer.load(voc_path)
+    else:
+        sample_text = data_path.read_text(encoding="utf-8", errors="replace")[:10000]
+        tokenizer = ByteBPETokenizer.train(sample_text, vocab_size=args.vocab_size or 512, verbose=False)
+        tokenizer.save(voc_path)
+
+    # 2. Config & Model
+    if cfg_path.exists():
+        config = GPTConfig.from_dict(json.loads(cfg_path.read_text(encoding="utf-8")))
+    else:
+        config = GPTConfig(
+            vocab_size=len(tokenizer),
+            context_length=args.context_length,
+            embedding_dim=args.dim,
+            num_heads=args.heads,
+            num_layers=args.layers,
+            norm_type=args.norm_type,
+            pos_emb_type=args.pos_emb_type,
+            activation=args.activation,
+        )
+
+    if ckpt_path.exists():
+        print(f"[AutoTrain] Resuming from existing checkpoint: {ckpt_path}")
+        model = GPT.load(ckpt_path, config=config)
+    else:
+        print(f"[AutoTrain] Initializing new model with {config.estimate_parameter_count():,} parameters...")
+        model = GPT(config, seed=args.seed)
+
+    # 3. Dataset
+    if data_path.suffix in (".json", ".jsonl"):
+        print(f"[AutoTrain] Using ChatDataset with loss masking from {data_path} ...")
+        dataset = ChatDataset.load_json(data_path, tokenizer, context_length=config.context_length)
+    else:
+        print(f"[AutoTrain] Using plain text corpus from {data_path} ...")
+        text_content = data_path.read_text(encoding="utf-8", errors="replace")
+        tokens = tokenizer.encode(text_content, allowed_special=True)
+        dataset = TextDataset(tokens, context_length=config.context_length)
+
+    auto_trainer = AutoTrainer(
+        model=model,
+        tokenizer=tokenizer,
+        dataset=dataset,
+        base_lr=args.lr,
+        batch_size=args.batch_size,
+        checkpoint_dir=args.checkpoint_dir,
+    )
+
+    print(f"\n=======================================================")
+    print(f"   NumPy-GPT Autonomous Auto-Training Engine Active")
+    print(f"   Mode: {args.mode.upper()} | LR: {args.lr} | Batch: {args.batch_size}")
+    print(f"   Checkpoints saved automatically to: {args.checkpoint_dir}/")
+    print(f"   Press Ctrl+C at any time to pause or exit.")
+    print(f"=======================================================\n")
+
+    auto_trainer.start(mode=args.mode, target_lr=args.lr)
+
+    try:
+        last_step = 0
+        while True:
+            time.sleep(1.5)
+            tel = auto_trainer.get_telemetry()
+            if tel["total_steps"] != last_step:
+                last_step = tel["total_steps"]
+                val_str = f"{tel['val_loss']:.4f}" if tel['val_loss'] else "evaluating..."
+                best_str = f"{tel['best_val_loss']:.4f}" if tel['best_val_loss'] else "N/A"
+                print(
+                    f"Auto-Cycle #{tel['cycle_count']:3d} | Step {tel['total_steps']:5d} | "
+                    f"Loss: {tel['current_loss']:.4f} | Val: {val_str} (Best: {best_str}) | "
+                    f"Saved: {tel['auto_checkpoints']} ckpts"
+                )
+    except KeyboardInterrupt:
+        print("\n[AutoTrain] Gracefully stopping autonomous trainer...")
+        auto_trainer.stop()
+        print("[AutoTrain] Stopped. Best model saved in checkpoints/auto_trained_model.npz.")
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
@@ -454,12 +546,35 @@ def main() -> None:
     p_exp.add_argument("--output", type=str, default=None, help="Output .onnx path")
     p_exp.add_argument("--test", action="store_true", default=True, help="Test exported model with ONNX Runtime")
 
+    # --- Auto-Train Subcommand ---
+    p_auto = subparsers.add_parser("auto-train", help="Autonomous self-training loop with automatic evaluation and checkpoints")
+    p_auto.add_argument("--data", type=str, default="corpus/sample_chatgpt_dataset.json", help="Path to JSON/JSONL or text dataset")
+    p_auto.add_argument("--mode", type=str, default="autonomous_loop", choices=["autonomous_loop", "self_play"], help="Self-training mode")
+    p_auto.add_argument("--checkpoint", type=str, default="checkpoint.npz")
+    p_auto.add_argument("--config", type=str, default=None)
+    p_auto.add_argument("--tokenizer-vocab", type=str, default=None)
+    p_auto.add_argument("--vocab-size", type=int, default=512)
+    p_auto.add_argument("--context-length", type=int, default=128)
+    p_auto.add_argument("--dim", type=int, default=128)
+    p_auto.add_argument("--heads", type=int, default=4)
+    p_auto.add_argument("--layers", type=int, default=4)
+    p_auto.add_argument("--norm-type", type=str, default="rmsnorm")
+    p_auto.add_argument("--pos-emb-type", type=str, default="rope")
+    p_auto.add_argument("--activation", type=str, default="swiglu")
+    p_auto.add_argument("--batch-size", type=int, default=2)
+    p_auto.add_argument("--lr", type=float, default=3e-4)
+    p_auto.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    p_auto.add_argument("--device", type=str, default="auto")
+    p_auto.add_argument("--seed", type=int, default=42)
+
     args = parser.parse_args()
 
     if args.subcommand == "hardware":
         cmd_hardware(args)
     elif args.subcommand == "train":
         cmd_train(args)
+    elif args.subcommand == "auto-train":
+        cmd_autotrain(args)
     elif args.subcommand == "generate":
         cmd_generate(args)
     elif args.subcommand == "chat":

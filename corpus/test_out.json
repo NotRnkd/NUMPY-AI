@@ -1,0 +1,98 @@
+[
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain Rotary Position Embeddings (RoPE)."
+      },
+      {
+        "role": "assistant",
+        "content": "RoPE encodes relative position by rotating Query and Key vectors in the complex plane: R_Theta,m @ x. Unlike absolute positional embeddings, RoPE preserves distance decay naturally through dot-product angle differences and uses zero learned parameters."
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Why do autoregressive models use KV-caching during text generation?"
+      },
+      {
+        "role": "assistant",
+        "content": "Without KV-caching, generating N tokens requires recomputing all past Key and Value vectors at every step, causing O(N^2) complexity. KV-caching stores previous keys and values in memory, allowing each new token to be generated with O(1) attention computation per step."
+      },
+      {
+        "role": "user",
+        "content": "What is the tradeoff of KV-caching?"
+      },
+      {
+        "role": "assistant",
+        "content": "The main tradeoff is memory footprint (VRAM/RAM). The cache size scales linearly with batch size, context length, number of layers, and hidden dimensions."
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a Python function to compute softmax with numerical stability."
+      },
+      {
+        "role": "assistant",
+        "content": "import numpy as np\n\ndef softmax(x, axis=-1):\n    exp_x = np.exp(x - np.max(x, axis=axis, keepdims=True))\n    return exp_x / np.sum(exp_x, axis=axis, keepdims=True)"
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "How does RMSNorm differ from LayerNorm?"
+      },
+      {
+        "role": "assistant",
+        "content": "RMSNorm simplifies Layer Normalization by removing the mean-centering step and computing only the root mean square of inputs: RMS(x) = sqrt(1/d * sum(x_i^2) + eps). This saves computation while providing comparable training stability."
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is AdamW?\n\nContext:\nOptimizer used for transformers"
+      },
+      {
+        "role": "assistant",
+        "content": "AdamW decouples weight decay (L2 regularization) from the gradient updates, applying weight shrinkage directly to weights: theta = theta - lr * weight_decay * theta - lr * m_hat / (sqrt(v_hat) + eps)."
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is NumPy-GPT?"
+      },
+      {
+        "role": "assistant",
+        "content": "NumPy-GPT is a production-grade neural language model implemented purely in NumPy and CuPy, without dependencies on PyTorch, JAX, or TensorFlow."
+      }
+    ]
+  },
+  {
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a concise offline AI assistant."
+      },
+      {
+        "role": "user",
+        "content": "What is SwiGLU activation?"
+      },
+      {
+        "role": "assistant",
+        "content": "SwiGLU is a Gated Linear Unit activation function defined as SwiGLU(x) = (x @ W_gate * sigmoid(beta * (x @ W_gate))) * (x @ W_up). It improves transformer representation quality over standard GELU or ReLU."
+      }
+    ]
+  }
+]

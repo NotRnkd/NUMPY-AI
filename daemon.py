@@ -21,6 +21,7 @@ from inference.generate import generate_stream, generate_text
 from model.config import GPTConfig, get_preset_config
 from model.transformer import GPT
 from tokenizer.bpe import ByteBPETokenizer
+from training.auto_trainer import AutoTrainer
 from training.dataset import ChatDataset, TextDataset
 from training.optimizer import AdamW
 from training.scheduler import CosineWarmupScheduler
@@ -34,6 +35,7 @@ current_model: Optional[GPT] = None
 current_tokenizer: Optional[ByteBPETokenizer] = None
 current_config: Optional[GPTConfig] = None
 active_training_thread: Optional[threading.Thread] = None
+global_auto_trainer: Optional[AutoTrainer] = None
 training_stop_requested = False
 training_metrics = {
     "is_training": False,
@@ -144,6 +146,52 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/train/status":
             with state_lock:
                 self._send_json(dict(training_metrics))
+        elif parsed.path == "/api/datasets":
+            available = []
+            candidates = [
+                ("corpus/sample_chatgpt_dataset.json", "ChatGPT Sample (Alpaca/Dolly/ShareGPT)", "chat"),
+                ("data.txt", "Basic Python Code Corpus", "text"),
+            ]
+            for path_str, name, dtype in candidates:
+                p = Path(path_str)
+                if p.exists():
+                    available.append({
+                        "path": path_str,
+                        "name": name,
+                        "type": dtype,
+                        "size_kb": round(p.stat().st_size / 1024, 1),
+                    })
+            # Also check user custom datasets in corpus/
+            corpus_dir = Path("corpus")
+            if corpus_dir.exists():
+                for f in corpus_dir.glob("*.json"):
+                    p_str = str(f)
+                    if p_str != "corpus/sample_chatgpt_dataset.json":
+                        available.append({
+                            "path": p_str,
+                            "name": f"Custom: {f.name}",
+                            "type": "chat",
+                            "size_kb": round(f.stat().st_size / 1024, 1),
+                        })
+            self._send_json({"datasets": available})
+        elif parsed.path == "/api/autotrain/status":
+            with state_lock:
+                if global_auto_trainer is not None:
+                    self._send_json(global_auto_trainer.get_telemetry())
+                else:
+                    self._send_json({
+                        "is_running": False,
+                        "mode": "autonomous_loop",
+                        "cycle_count": 0,
+                        "total_steps": 0,
+                        "current_loss": 0.0,
+                        "val_loss": 0.0,
+                        "best_val_loss": None,
+                        "auto_checkpoints": 0,
+                        "status_message": "Idle (not started)",
+                        "synthetic_pairs_generated": 0,
+                        "history": [],
+                    })
         else:
             self._send_json({"error": "Not Found"}, status=404)
 
@@ -270,6 +318,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 batch_size = int(payload.get("batch_size", 2))
                 grad_accum = int(payload.get("grad_accum", 1))
 
+                selected_dataset_path = payload.get("dataset_path", "corpus/sample_chatgpt_dataset.json")
+                custom_data_str = payload.get("custom_data", "")
+
                 def run_train():
                     global training_stop_requested
                     try:
@@ -278,10 +329,26 @@ class RequestHandler(BaseHTTPRequestHandler):
                         training_metrics["step"] = 0
                         training_metrics["history"] = []
 
-                        data_p = Path("data.txt")
-                        text_content = data_p.read_text(encoding="utf-8", errors="replace")
-                        tokens = current_tokenizer.encode(text_content, allowed_special=True)
-                        dataset = TextDataset(tokens, context_length=current_config.context_length)
+                        # If user pasted custom data, save to temporary custom dataset file
+                        if custom_data_str and custom_data_str.strip():
+                            Path("corpus").mkdir(exist_ok=True)
+                            target_p = Path("corpus/custom_uploaded.json")
+                            target_p.write_text(custom_data_str.strip(), encoding="utf-8")
+                            data_p = target_p
+                        else:
+                            data_p = Path(selected_dataset_path)
+                            if not data_p.exists():
+                                data_p = Path("data.txt")
+
+                        # Load as ChatDataset or TextDataset
+                        if data_p.suffix in (".json", ".jsonl"):
+                            dataset = ChatDataset.load_json(data_p, current_tokenizer, context_length=current_config.context_length)
+                            is_chat = True
+                        else:
+                            text_content = data_p.read_text(encoding="utf-8", errors="replace")
+                            tokens = current_tokenizer.encode(text_content, allowed_special=True)
+                            dataset = TextDataset(tokens, context_length=current_config.context_length)
+                            is_chat = False
 
                         opt = AdamW(current_model.params, lr=lr, weight_decay=0.1)
                         sched = CosineWarmupScheduler(base_lr=lr, warmup_steps=max(5, steps // 10), max_steps=steps)
@@ -290,14 +357,24 @@ class RequestHandler(BaseHTTPRequestHandler):
                             if training_stop_requested:
                                 break
 
-                            x, y = dataset.get_batch(batch_size=batch_size, split="train")
-                            loss, grads = current_model.loss_and_gradients(x, y)
+                            if is_chat:
+                                x, y, mask = dataset.get_batch(batch_size=batch_size, split="train")
+                                loss, grads = current_model.loss_and_gradients(x, y, target_mask=mask)
+                            else:
+                                x, y = dataset.get_batch(batch_size=batch_size, split="train")
+                                loss, grads = current_model.loss_and_gradients(x, y)
+
                             curr_lr = sched.get_lr(s)
                             opt.step(grads, lr=curr_lr)
 
                             if s % 5 == 0 or s == steps:
-                                val_x, val_y = dataset.get_batch(batch_size=batch_size, split="val")
-                                val_loss, _ = current_model.loss_and_gradients(val_x, val_y)
+                                if is_chat:
+                                    val_x, val_y, val_mask = dataset.get_batch(batch_size=batch_size, split="val")
+                                    val_loss, _ = current_model.loss_and_gradients(val_x, val_y, target_mask=val_mask)
+                                else:
+                                    val_x, val_y = dataset.get_batch(batch_size=batch_size, split="val")
+                                    val_loss, _ = current_model.loss_and_gradients(val_x, val_y)
+
                                 training_metrics["step"] = s
                                 training_metrics["loss"] = round(float(loss), 4)
                                 training_metrics["val_loss"] = round(float(val_loss), 4)
@@ -321,6 +398,49 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/train/stop":
             training_stop_requested = True
             self._send_json({"status": "stopping"})
+        elif parsed.path == "/api/autotrain/start":
+            global global_auto_trainer
+            mode = payload.get("mode", "autonomous_loop")
+            dataset_path = payload.get("dataset_path", "corpus/sample_chatgpt_dataset.json")
+            lr = float(payload.get("lr", 0.0003))
+
+            with state_lock:
+                if global_auto_trainer is not None and global_auto_trainer.is_running:
+                    self._send_json({"status": "already_running", "telemetry": global_auto_trainer.get_telemetry()})
+                    return
+
+                p = Path(dataset_path)
+                if not p.exists():
+                    p = Path("data.txt")
+
+                if p.suffix in (".json", ".jsonl"):
+                    dataset = ChatDataset.load_json(p, current_tokenizer, context_length=current_config.context_length)
+                else:
+                    text_content = p.read_text(encoding="utf-8", errors="replace")
+                    tokens = current_tokenizer.encode(text_content, allowed_special=True)
+                    dataset = TextDataset(tokens, context_length=current_config.context_length)
+
+                global_auto_trainer = AutoTrainer(
+                    model=current_model,
+                    tokenizer=current_tokenizer,
+                    dataset=dataset,
+                    base_lr=lr,
+                    batch_size=2,
+                    checkpoint_dir="checkpoints",
+                    lock=state_lock,
+                )
+                global_auto_trainer.start(mode=mode, target_lr=lr)
+
+            self._send_json({"status": "autotrain_started", "mode": mode, "dataset": str(p)})
+
+        elif parsed.path == "/api/autotrain/stop":
+            with state_lock:
+                if global_auto_trainer is not None:
+                    global_auto_trainer.stop()
+                    msg = "stopped"
+                else:
+                    msg = "not_running"
+            self._send_json({"status": msg})
         else:
             self._send_json({"error": "Not Found"}, status=404)
 
