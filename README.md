@@ -65,6 +65,27 @@ The neural network "brain" has been redesigned with modern LLM architectural sta
 
 ---
 
+## Quick Start: One-Click Launcher
+
+### Windows (.bat)
+Simply double-click **`launch.bat`** in the project folder (or run it from cmd / PowerShell):
+```cmd
+launch.bat
+```
+This automatically:
+1. Verifies Python 3.9+ and installs `numpy` if not present
+2. Verifies Node.js and installs frontend dependencies on first run
+3. Starts the background Python inference & training daemon (port 5005)
+4. Starts the web studio on `http://localhost:3000`
+5. Opens your default web browser directly to the studio
+
+### Linux / macOS (.sh)
+```bash
+./launch.sh
+```
+
+---
+
 ## Installation & Setup
 
 Requirements: Python 3.9+ with `numpy`.
